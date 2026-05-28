@@ -1,4 +1,4 @@
-# hackX
+# HackX
 
 > **hackX** is a personal fork of [Shannon](https://github.com/KeygraphHQ/shannon) by [Keygraph](https://keygraph.io), pre-configured to run on **GLM-4.6 via Z.ai** (Anthropic-compatible endpoint) instead of the official Anthropic API.
 >
