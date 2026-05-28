@@ -1,54 +1,407 @@
 # HackX
 
-> **hackX** is a personal fork of [Shannon](https://github.com/KeygraphHQ/shannon) by [Keygraph](https://keygraph.io), pre-configured to run on **GLM-4.6 via Z.ai** (Anthropic-compatible endpoint) instead of the official Anthropic API.
+> **HackX** is a personal fork of [Shannon](https://github.com/KeygraphHQ/shannon) by [Keygraph](https://keygraph.io), pre-configured to run on **GLM-4.6 via Z.ai** (Anthropic-compatible endpoint) instead of the official Anthropic API — for a fraction of the cost.
 >
 > All credit for the underlying technology goes to the Keygraph team. This fork only adds:
-> - This intro section
+> - This README intro section
 > - A new `OPTION: Z.ai / GLM-4.6` block in [`.env.example`](./.env.example)
 > - A standalone [`hackx-cost`](./hackx-cost) script for per-run cost reporting (USD + EUR, with Claude comparison)
 >
 > The Shannon source tree is left untouched on purpose, to keep upstream merges painless.
-
-### Cost tracking — `./hackx-cost`
-
-After a run, get a breakdown of what it cost (and what it would have cost on Claude):
-
-```bash
-./hackx-cost              # latest workspace
-./hackx-cost --list       # all workspaces with totals
-./hackx-cost <name>       # specific workspace
-./hackx-cost --help
-```
-
-The script reads `workspaces/<name>/session.json` (produced by Shannon's `MetricsTracker`). No code modification, no new dependency — pure Node.js.
 >
 > **License:** AGPL-3.0 (inherited from Shannon — see [`LICENSE`](./LICENSE)).
 
-## Syncing with upstream Shannon
+---
 
-This fork tracks `KeygraphHQ/shannon` as the `upstream` remote.
+## Table of Contents
+
+1. [What is HackX?](#what-is-hackx)
+2. [Prerequisites by OS](#prerequisites-by-os)
+   - [macOS](#macos)
+   - [Windows](#windows)
+   - [Linux](#linux)
+3. [Get your Z.ai API key](#get-your-zai-api-key)
+4. [Install HackX](#install-hackx)
+5. [Configure `.env`](#configure-env)
+6. [Build & run your first scan](#build--run-your-first-scan)
+7. [Track your costs — `hackx-cost`](#track-your-costs--hackx-cost)
+8. [Update from upstream Shannon](#update-from-upstream-shannon)
+9. [Troubleshooting](#troubleshooting)
+10. [Original Shannon documentation](#original-shannon-readme)
+
+---
+
+## What is HackX?
+
+HackX is an autonomous, white-box AI pentester for web applications and APIs. It analyzes your application's source code, identifies attack vectors, and executes real exploits to prove vulnerabilities — fully unattended.
+
+It is **the exact same engine as Shannon**, just rewired to talk to **GLM-4.6 via Z.ai** instead of Anthropic's Claude. This means:
+
+- **~80–95% cheaper per run** than running Shannon on Claude Sonnet/Opus
+- **Same five-phase pipeline**: pre-recon → recon → vuln analysis → exploitation → report
+- **Same OWASP coverage**: Injection, XSS, SSRF, Broken Auth / Authz
+- **Real proof-of-concept exploits** in the final report (no false positives)
+
+---
+
+## Prerequisites by OS
+
+You need three things on your machine: **Docker**, **Node.js ≥ 20**, **pnpm ≥ 10.16**, plus **Git**. Pick your OS below.
+
+### macOS
+
+**1. Install Homebrew** (if you don't have it):
 
 ```bash
-git remote -v
-# origin    -> your hackX repo
-# upstream  -> https://github.com/KeygraphHQ/shannon.git
-
-# Pull the latest Shannon changes
-git fetch upstream
-git merge upstream/main
-# Resolve any conflicts (usually only README.md / .env.example)
-git push origin <your-branch>
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-If `upstream` is missing, add it once:
+**2. Install Docker Desktop:**
 
 ```bash
-git remote add upstream https://github.com/KeygraphHQ/shannon.git
+brew install --cask docker
+open -a Docker
+```
+
+Wait until the Docker whale icon appears in your menu bar, then verify:
+
+```bash
+docker --version
+docker ps        # must work without error
+```
+
+**3. Install Node.js (via nvm — recommended) and pnpm:**
+
+```bash
+brew install nvm
+mkdir ~/.nvm
+echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc
+echo '[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && . "/opt/homebrew/opt/nvm/nvm.sh"' >> ~/.zshrc
+source ~/.zshrc
+nvm install 20
+nvm use 20
+npm install -g pnpm
+```
+
+**4. Verify:**
+
+```bash
+node --version       # v20.x.x
+pnpm --version       # 10.x.x or higher
+git --version        # already on macOS
 ```
 
 ---
 
+### Windows
+
+> **Strong recommendation:** use **WSL2 + Ubuntu** and follow the Linux instructions below. HackX (and the `./shannon` bash entry point) was designed for Unix-like environments. Trying to run it from PowerShell directly will cause endless friction.
+
+**1. Install WSL2 + Ubuntu** (PowerShell as Administrator):
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Reboot when prompted. On first launch of Ubuntu, set up your Linux username/password.
+
+**2. Install Docker Desktop for Windows:**
+
+- Download: https://www.docker.com/products/docker-desktop/
+- Run the installer (keep the default "Use WSL 2 instead of Hyper-V" option checked)
+- After installation, open **Settings → Resources → WSL Integration** and enable integration with your Ubuntu distro
+- Restart Docker Desktop
+
+**3. From now on, work inside Ubuntu (WSL2).** Open it from the Start menu and follow the **Linux instructions below**.
+
+To verify Docker is reachable from WSL:
+
+```bash
+docker --version
+docker ps
+```
+
+---
+
+### Linux
+
+Tested on Ubuntu 22.04+ / Debian 12+ / Fedora 39+ / WSL2 Ubuntu.
+
+**1. Install Docker** (Ubuntu / Debian / WSL2 Ubuntu):
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+newgrp docker
+docker --version
+docker ps
+```
+
+Fedora / RHEL:
+
+```bash
+sudo dnf install -y docker docker-compose
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+**2. Install Node.js 20 (via nvm) and pnpm:**
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm install 20
+nvm use 20
+npm install -g pnpm
+```
+
+**3. Install Git** (probably already present):
+
+```bash
+sudo apt install -y git    # Debian/Ubuntu
+sudo dnf install -y git    # Fedora/RHEL
+```
+
+**4. Verify:**
+
+```bash
+node --version       # v20.x.x
+pnpm --version       # 10.x.x or higher
+docker --version
+git --version
+```
+
+---
+
+## Get your Z.ai API key
+
+1. Go to https://z.ai and create an account.
+2. In your dashboard, navigate to **Billing → Add Credit** and add a small prepaid amount (e.g. **$5**). **Do not** subscribe to the Coding Plan unless you run 10+ pentests per month — prepaid is much cheaper for occasional use.
+3. Navigate to **API Keys → Create Key**.
+4. **Copy the key and keep it secret.** Treat it like a password. **Never share it in chat, screenshots, commits, or screenshots.** If it leaks, immediately revoke it from the same dashboard.
+
+---
+
+## Install HackX
+
+These steps are **the same on macOS, Linux, and WSL2**.
+
+**1. Clone the repository:**
+
+```bash
+git clone https://github.com/K3E9X/HackX.git
+cd HackX
+```
+
+**2. Add the Shannon upstream remote** (so you can pull future updates):
+
+```bash
+git remote add upstream https://github.com/KeygraphHQ/shannon.git
+git remote -v
+# should show:
+#   origin    https://github.com/K3E9X/HackX.git (fetch + push)
+#   upstream  https://github.com/KeygraphHQ/shannon.git (fetch + push)
+```
+
+**3. Install Node dependencies:**
+
+```bash
+pnpm install
+```
+
+This pulls everything Shannon needs. May take a few minutes the first time.
+
+---
+
+## Configure `.env`
+
+**1. Copy the template:**
+
+```bash
+cp .env.example .env
+```
+
+**2. Open `.env` in your editor** (`nano .env`, `code .env`, `vim .env`, etc.).
+
+**3. Find the `OPTION 0 (hackX default): Z.ai / GLM-4.6` block and uncomment the five lines, replacing the placeholder with your real key:**
+
+```env
+ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic
+ANTHROPIC_AUTH_TOKEN=<paste-your-zai-key-here>
+ANTHROPIC_SMALL_MODEL=glm-4.5-air
+ANTHROPIC_MEDIUM_MODEL=glm-4.6
+ANTHROPIC_LARGE_MODEL=glm-4.6
+```
+
+**4. Add this line at the bottom** (GLM does not support Anthropic's adaptive thinking):
+
+```env
+CLAUDE_ADAPTIVE_THINKING=false
+```
+
+**5. Comment out the default `ANTHROPIC_API_KEY` line** to make sure the SDK does not try to use Anthropic:
+
+```env
+# ANTHROPIC_API_KEY=your-api-key-here
+```
+
+**6. Verify your `.env` is git-ignored** (it should be — `.gitignore` already lists it):
+
+```bash
+git check-ignore -v .env
+# should print: .gitignore:N:.env  .env
+git status
+# .env must NOT appear
+```
+
+---
+
+## Build & run your first scan
+
+**1. Build the worker Docker image** (one-time, ~5 minutes):
+
+```bash
+./shannon build
+```
+
+**2. Smoke test with `--pipeline-testing`** (cheap, ~$0.01–0.05):
+
+This runs the whole pipeline with minimal prompts. It validates that Docker, Temporal, and Z.ai/GLM-4.6 are all wired up correctly.
+
+```bash
+./shannon start -u https://your-target.example.com -r /path/to/source-code --pipeline-testing
+```
+
+- `-u` is the URL of the running app to test.
+- `-r` is the path to a local clone of the application's source code (Shannon is white-box — it reads the code).
+
+While it runs, you can watch the Temporal Web UI at http://localhost:8233.
+
+**3. Real run** (full prompts, full exploitation):
+
+```bash
+./shannon start -u https://your-target.example.com -r /path/to/source-code
+```
+
+Typical cost on GLM-4.6 via Z.ai pay-per-token: **$0.05 to $2** depending on target complexity.
+
+**4. Useful runtime options:**
+
+| Option | Purpose |
+|---|---|
+| `-w <name>` | Named workspace (auto-resumes if it already exists) |
+| `-c <file>` | Custom YAML config (auth, MFA, etc. — see `apps/worker/configs/`) |
+| `-o <path>` | Output directory for the final report |
+| `--debug` | Keep the worker container after exit for log inspection |
+| `--pipeline-testing` | Minimal prompts + fast retries (cheap) |
+
+**5. Monitor & control:**
+
+```bash
+./shannon logs <workspace>     # tail the workflow log
+./shannon status               # show running workers
+./shannon workspaces           # list all past workspaces
+./shannon stop                 # stop infra (preserves data)
+./shannon stop --clean         # full cleanup (asks confirmation)
+```
+
+---
+
+## Track your costs — `hackx-cost`
+
+After any run, get a clear cost breakdown:
+
+```bash
+./hackx-cost                  # latest run
+./hackx-cost --list           # all past runs in a table
+./hackx-cost <workspace-name> # specific run
+./hackx-cost --eur-rate 0.93  # override the USD→EUR conversion rate
+./hackx-cost --help
+```
+
+Sample output:
+
+```
+hackX — Cost Report — my-audit_abc123
+═════════════════════════════════════════════════════════════════
+
+  Target:     https://my-app.example.com
+  Status:     completed
+  Duration:   24m 12s
+
+Phase breakdown
+  PHASE              AGENTS  DURATION    SHARE   COST USD   COST EUR
+  pre-recon              2     2m 54s    12.0%    $0.0104    €0.0096
+  recon                  1     1m 56s     8.0%    $0.0070    €0.0064
+  vuln-analysis          5    10m 53s    45.0%    $0.0392    €0.0361
+  exploitation           5     6m 46s    28.0%    $0.0244    €0.0224
+  report                 1     1m 41s     7.0%    $0.0060    €0.0055
+
+Totals
+  This run (GLM-4.6 via Z.ai):    $0.0870   €0.0800
+  Estimated equivalent on Claude:
+    Sonnet 4.6:                   $0.4971   €0.4574
+    Opus 4.7:                     $2.49     €2.29
+  Savings vs Sonnet: 82.5%
+  Savings vs Opus:   96.5%
+```
+
+The script is pure Node.js — no extra dependency, no code modification to Shannon.
+
+---
+
+## Update from upstream Shannon
+
+The Shannon project ships updates regularly. To pull them into your HackX clone:
+
+```bash
+git fetch upstream
+git checkout main
+git merge upstream/main
+# Resolve any conflicts (usually only README.md and .env.example)
+git push origin main
+```
+
+Because HackX only modifies **three files** (`README.md`, `.env.example`, and adds `hackx-cost`), conflicts are rare and always trivial to resolve.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `docker: command not found` | Docker not installed or daemon not running. On macOS/Windows, open Docker Desktop. On Linux: `sudo systemctl start docker`. |
+| `permission denied` on docker | You're not in the `docker` group. Fix: `sudo usermod -aG docker $USER && newgrp docker`. |
+| `pnpm: command not found` | `npm install -g pnpm` (after Node ≥ 20 is installed). |
+| `Temporal not ready` | Wait ~30s for the infra container, or `docker compose logs temporal`. |
+| `Repository not found` | `-r my-repo` looks in `./repos/my-repo`. Use a full path: `-r /path/to/repo`. |
+| `total_cost_usd = $0.00` everywhere in `hackx-cost` | Z.ai might not be returning cost data on your plan. Check the Z.ai dashboard for the real billed amount. |
+| 401 from Z.ai | The key goes in `ANTHROPIC_AUTH_TOKEN`, NOT `ANTHROPIC_API_KEY`. Double-check. |
+| Crash on `thinking` blocks | You forgot `CLAUDE_ADAPTIVE_THINKING=false` in `.env`. |
+| Local app unreachable from container | Use `host.docker.internal` instead of `localhost` in the target URL. |
+| Reset everything | `./shannon stop --clean` then start over. |
+
+---
+
+## Security disclaimer
+
+HackX (like Shannon) is a **defensive security tool**. Only use it against systems you own or have **explicit written permission** to test. Unauthorized pentesting is illegal in most jurisdictions.
+
+---
+
+## License & attribution
+
+- **Code:** AGPL-3.0 (see [`LICENSE`](./LICENSE)).
+- **All copyright on the underlying engine:** © Keygraph, Inc.
+- HackX is an **unaffiliated personal fork**. Not endorsed by Keygraph. For commercial / enterprise use, look at [Shannon Pro](./SHANNON-PRO.md).
+
+---
+
 ## Original Shannon README
+
+The rest of this file is the upstream Shannon README, preserved verbatim. It contains feature lists, sample reports, and additional documentation that applies equally to HackX (since the engine is identical).
 
 >[!NOTE]
 > **[📢 Sunsetting Router Mode (claude-code-router)`. →](https://github.com/KeygraphHQ/shannon/discussions/301)**
