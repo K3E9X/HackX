@@ -260,13 +260,21 @@ git status
 
 ## Build & run your first scan
 
-**1. Build the worker Docker image** (one-time, ~5 minutes):
+**1. Compile the TypeScript sources** (one-time after install or after any `git pull`):
+
+```bash
+pnpm run build
+```
+
+This runs Turborepo across all packages and produces `apps/cli/dist/index.mjs` (the file `./shannon` boots from). Takes ~30–60 seconds. Skip it and you'll get `ERR_MODULE_NOT_FOUND: ... apps/cli/dist/index.mjs`.
+
+**2. Build the worker Docker image** (one-time, ~5 minutes):
 
 ```bash
 ./shannon build
 ```
 
-**2. Smoke test with `--pipeline-testing`** (cheap, ~$0.01–0.05):
+**3. Smoke test with `--pipeline-testing`** (cheap, ~$0.01–0.05):
 
 This runs the whole pipeline with minimal prompts. It validates that Docker, Temporal, and Z.ai/GLM-4.6 are all wired up correctly.
 
@@ -279,7 +287,7 @@ This runs the whole pipeline with minimal prompts. It validates that Docker, Tem
 
 While it runs, you can watch the Temporal Web UI at http://localhost:8233.
 
-**3. Real run** (full prompts, full exploitation):
+**4. Real run** (full prompts, full exploitation):
 
 ```bash
 ./shannon start -u https://your-target.example.com -r /path/to/source-code
@@ -287,7 +295,7 @@ While it runs, you can watch the Temporal Web UI at http://localhost:8233.
 
 Typical cost on GLM-4.6 via Z.ai pay-per-token: **$0.05 to $2** depending on target complexity.
 
-**4. Useful runtime options:**
+**5. Useful runtime options:**
 
 | Option | Purpose |
 |---|---|
@@ -297,7 +305,7 @@ Typical cost on GLM-4.6 via Z.ai pay-per-token: **$0.05 to $2** depending on tar
 | `--debug` | Keep the worker container after exit for log inspection |
 | `--pipeline-testing` | Minimal prompts + fast retries (cheap) |
 
-**5. Monitor & control:**
+**6. Monitor & control:**
 
 ```bash
 ./shannon logs <workspace>     # tail the workflow log
@@ -372,6 +380,7 @@ Because HackX only modifies **three files** (`README.md`, `.env.example`, and ad
 
 | Symptom | Likely cause / fix |
 |---|---|
+| `ERR_MODULE_NOT_FOUND: ... apps/cli/dist/index.mjs` when running `./shannon` | You skipped the TypeScript build. Run `pnpm run build` first. |
 | `docker: command not found` | Docker not installed or daemon not running. On macOS/Windows, open Docker Desktop. On Linux: `sudo systemctl start docker`. |
 | `permission denied` on docker | You're not in the `docker` group. Fix: `sudo usermod -aG docker $USER && newgrp docker`. |
 | `pnpm: command not found` | `npm install -g pnpm` (after Node ≥ 20 is installed). |
