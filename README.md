@@ -2,11 +2,25 @@
 
 > **hackX** is a personal fork of [Shannon](https://github.com/KeygraphHQ/shannon) by [Keygraph](https://keygraph.io), pre-configured to run on **GLM-4.6 via Z.ai** (Anthropic-compatible endpoint) instead of the official Anthropic API.
 >
-> All credit for the underlying technology goes to the Keygraph team. This fork only changes:
+> All credit for the underlying technology goes to the Keygraph team. This fork only adds:
 > - This intro section
 > - A new `OPTION: Z.ai / GLM-4.6` block in [`.env.example`](./.env.example)
+> - A standalone [`hackx-cost`](./hackx-cost) script for per-run cost reporting (USD + EUR, with Claude comparison)
 >
-> The rest of the codebase is left untouched on purpose, to keep upstream merges painless.
+> The Shannon source tree is left untouched on purpose, to keep upstream merges painless.
+
+### Cost tracking — `./hackx-cost`
+
+After a run, get a breakdown of what it cost (and what it would have cost on Claude):
+
+```bash
+./hackx-cost              # latest workspace
+./hackx-cost --list       # all workspaces with totals
+./hackx-cost <name>       # specific workspace
+./hackx-cost --help
+```
+
+The script reads `workspaces/<name>/session.json` (produced by Shannon's `MetricsTracker`). No code modification, no new dependency — pure Node.js.
 >
 > **License:** AGPL-3.0 (inherited from Shannon — see [`LICENSE`](./LICENSE)).
 

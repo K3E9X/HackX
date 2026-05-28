@@ -1,0 +1,273 @@
+#!/usr/bin/env node
+// hackx-cost — Cost report for hackX (Shannon fork) runs.
+//
+// Reads workspaces/<name>/session.json (produced by Shannon's MetricsTracker)
+// and renders a per-phase / per-agent cost breakdown in USD + EUR, plus
+// a comparative estimate of what the same run would have cost on Claude.
+//
+// Usage:
+//   ./hackx-cost                  # latest workspace
+//   ./hackx-cost --latest         # same
+//   ./hackx-cost --list           # list all workspaces with totals
+//   ./hackx-cost <workspace-name> # specific workspace
+//   ./hackx-cost --eur-rate 0.93  # override USD->EUR rate (default 0.92)
+
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+const ROOT = process.cwd();
+const WORKSPACES_DIR = join(ROOT, 'workspaces');
+
+// USD per 1M tokens. GLM rates approximate Z.ai pay-per-token (May 2025).
+// Update freely — these are display-only references.
+const PRICING = {
+  'glm-4.6':           { input: 0.60, output: 2.20 },
+  'glm-4.5-air':       { input: 0.20, output: 1.10 },
+  'claude-haiku-4-5':  { input: 0.80, output: 4.00 },
+  'claude-sonnet-4-6': { input: 3.00, output: 15.00 },
+  'claude-opus-4-7':   { input: 15.00, output: 75.00 },
+};
+
+// Average input/output ratio observed in Shannon-style agentic workloads
+// (lots of code context in, structured findings out). Used to estimate
+// equivalent Claude cost from a recorded GLM cost.
+const INPUT_OUTPUT_RATIO = { input: 0.85, output: 0.15 };
+
+const C = {
+  reset: '\x1b[0m',  bold: '\x1b[1m',  dim: '\x1b[2m',
+  red:   '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
+  blue:  '\x1b[34m', mag:   '\x1b[35m', cyan:  '\x1b[36m',
+};
+
+function fmtUsd(n) {
+  if (n === 0) return '$0.00';
+  return n < 1 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+}
+function fmtEur(n, rate) {
+  const v = n * rate;
+  if (v === 0) return '€0.00';
+  return v < 1 ? `€${v.toFixed(4)}` : `€${v.toFixed(2)}`;
+}
+function fmtDuration(ms) {
+  if (!ms) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return `${m}m ${rem}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+function pad(s, n) { return String(s).padEnd(n); }
+function lpad(s, n) { return String(s).padStart(n); }
+
+function findWorkspaces() {
+  if (!existsSync(WORKSPACES_DIR)) return [];
+  return readdirSync(WORKSPACES_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => {
+      const path = join(WORKSPACES_DIR, d.name);
+      const sessionPath = join(path, 'session.json');
+      const mtime = existsSync(sessionPath)
+        ? statSync(sessionPath).mtimeMs
+        : statSync(path).mtimeMs;
+      return { name: d.name, path, sessionPath, mtime, hasSession: existsSync(sessionPath) };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+}
+
+function loadSession(workspace) {
+  if (!workspace.hasSession) {
+    throw new Error(`No session.json in workspace "${workspace.name}" — run probably did not finish.`);
+  }
+  return JSON.parse(readFileSync(workspace.sessionPath, 'utf8'));
+}
+
+// Estimate equivalent Claude cost from recorded GLM cost.
+// Recorded cost = tokens_in * glm_in + tokens_out * glm_out
+// Using the input/output split assumption, derive total tokens, then re-price.
+function estimateClaudeCost(glmCostUsd, claudeModel) {
+  if (glmCostUsd <= 0) return 0;
+  const glm = PRICING['glm-4.6'];
+  const blendedGlmRate = INPUT_OUTPUT_RATIO.input * glm.input + INPUT_OUTPUT_RATIO.output * glm.output;
+  const estTotalTokensMillions = glmCostUsd / blendedGlmRate;
+  const claude = PRICING[claudeModel];
+  return estTotalTokensMillions * (INPUT_OUTPUT_RATIO.input * claude.input + INPUT_OUTPUT_RATIO.output * claude.output);
+}
+
+function parseArgs(argv) {
+  const args = { eurRate: 0.92, cmd: 'latest', target: null };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--list') args.cmd = 'list';
+    else if (a === '--latest') args.cmd = 'latest';
+    else if (a === '--help' || a === '-h') args.cmd = 'help';
+    else if (a === '--eur-rate') args.eurRate = parseFloat(argv[++i]);
+    else if (!a.startsWith('--')) { args.cmd = 'report'; args.target = a; }
+  }
+  return args;
+}
+
+function printHelp() {
+  console.log(`
+${C.bold}hackx-cost${C.reset} — cost report for hackX workspace runs
+
+${C.bold}Usage:${C.reset}
+  ./hackx-cost                   show latest workspace
+  ./hackx-cost --latest          same
+  ./hackx-cost --list            list all workspaces with totals
+  ./hackx-cost <workspace-name>  show a specific workspace
+  ./hackx-cost --eur-rate 0.93   override USD->EUR rate (default 0.92)
+  ./hackx-cost --help            this help
+
+${C.dim}Reads workspaces/<name>/session.json produced by Shannon's MetricsTracker.${C.reset}
+`);
+}
+
+function printList(eurRate) {
+  const ws = findWorkspaces();
+  if (ws.length === 0) {
+    console.log(`${C.yellow}No workspaces found in ${WORKSPACES_DIR}${C.reset}`);
+    return;
+  }
+  console.log(`\n${C.bold}Workspaces (most recent first):${C.reset}\n`);
+  console.log(`  ${pad('NAME', 36)} ${pad('STATUS', 12)} ${lpad('DURATION', 10)} ${lpad('COST USD', 10)} ${lpad('COST EUR', 10)}`);
+  console.log(`  ${'-'.repeat(36)} ${'-'.repeat(12)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(10)}`);
+  for (const w of ws) {
+    if (!w.hasSession) {
+      console.log(`  ${pad(w.name, 36)} ${C.dim}${pad('no session', 12)} ${lpad('—', 10)} ${lpad('—', 10)} ${lpad('—', 10)}${C.reset}`);
+      continue;
+    }
+    try {
+      const s = JSON.parse(readFileSync(w.sessionPath, 'utf8'));
+      const cost = s.metrics?.total_cost_usd || 0;
+      const dur = s.metrics?.total_duration_ms || 0;
+      const status = s.session?.status || '?';
+      const color = status === 'completed' ? C.green : status === 'failed' ? C.red : C.yellow;
+      console.log(`  ${pad(w.name, 36)} ${color}${pad(status, 12)}${C.reset} ${lpad(fmtDuration(dur), 10)} ${lpad(fmtUsd(cost), 10)} ${lpad(fmtEur(cost, eurRate), 10)}`);
+    } catch (e) {
+      console.log(`  ${pad(w.name, 36)} ${C.red}${pad('parse err', 12)}${C.reset}`);
+    }
+  }
+  console.log();
+}
+
+function printReport(session, workspaceName, eurRate) {
+  const m = session.metrics || {};
+  const s = session.session || {};
+  const totalCost = m.total_cost_usd || 0;
+  const totalDuration = m.total_duration_ms || 0;
+  const phases = m.phases || {};
+  const agents = m.agents || {};
+
+  const line = '═'.repeat(72);
+  console.log(`\n${C.bold}${C.cyan}${line}${C.reset}`);
+  console.log(`${C.bold}hackX — Cost Report — ${C.cyan}${workspaceName}${C.reset}`);
+  console.log(`${C.bold}${C.cyan}${line}${C.reset}\n`);
+
+  console.log(`  ${C.dim}Target:${C.reset}     ${s.webUrl || '—'}`);
+  console.log(`  ${C.dim}Status:${C.reset}     ${s.status || '—'}`);
+  console.log(`  ${C.dim}Started:${C.reset}    ${s.createdAt || '—'}`);
+  if (s.completedAt) console.log(`  ${C.dim}Finished:${C.reset}   ${s.completedAt}`);
+  console.log(`  ${C.dim}Duration:${C.reset}   ${fmtDuration(totalDuration)}`);
+  console.log();
+
+  // Phases
+  if (Object.keys(phases).length > 0) {
+    console.log(`${C.bold}Phase breakdown${C.reset}`);
+    console.log(`  ${pad('PHASE', 18)} ${lpad('AGENTS', 8)} ${lpad('DURATION', 10)} ${lpad('SHARE', 8)} ${lpad('COST USD', 10)} ${lpad('COST EUR', 10)}`);
+    console.log(`  ${'-'.repeat(18)} ${'-'.repeat(8)} ${'-'.repeat(10)} ${'-'.repeat(8)} ${'-'.repeat(10)} ${'-'.repeat(10)}`);
+    for (const [name, p] of Object.entries(phases)) {
+      console.log(`  ${pad(name, 18)} ${lpad(p.agent_count ?? '—', 8)} ${lpad(fmtDuration(p.duration_ms), 10)} ${lpad(`${(p.duration_percentage || 0).toFixed(1)}%`, 8)} ${lpad(fmtUsd(p.cost_usd || 0), 10)} ${lpad(fmtEur(p.cost_usd || 0, eurRate), 10)}`);
+    }
+    console.log();
+  }
+
+  // Per-agent detail (sorted by cost desc)
+  const agentEntries = Object.entries(agents).sort((a, b) => (b[1].total_cost_usd || 0) - (a[1].total_cost_usd || 0));
+  if (agentEntries.length > 0) {
+    console.log(`${C.bold}Agent breakdown${C.reset} ${C.dim}(sorted by cost)${C.reset}`);
+    console.log(`  ${pad('AGENT', 22)} ${pad('STATUS', 12)} ${lpad('ATTEMPTS', 9)} ${lpad('DURATION', 10)} ${lpad('COST USD', 10)} ${lpad('COST EUR', 10)}`);
+    console.log(`  ${'-'.repeat(22)} ${'-'.repeat(12)} ${'-'.repeat(9)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(10)}`);
+    for (const [name, a] of agentEntries) {
+      const status = a.status || '?';
+      const color = status === 'success' ? C.green : status === 'failed' ? C.red : C.yellow;
+      console.log(`  ${pad(name, 22)} ${color}${pad(status, 12)}${C.reset} ${lpad(a.attempts?.length || 0, 9)} ${lpad(fmtDuration(a.final_duration_ms), 10)} ${lpad(fmtUsd(a.total_cost_usd || 0), 10)} ${lpad(fmtEur(a.total_cost_usd || 0, eurRate), 10)}`);
+    }
+    console.log();
+  }
+
+  // Totals + Claude comparative
+  console.log(`${C.bold}${'─'.repeat(72)}${C.reset}`);
+  console.log(`${C.bold}Totals${C.reset}\n`);
+  console.log(`  ${C.bold}This run (GLM-4.6 via Z.ai):${C.reset}    ${C.green}${fmtUsd(totalCost)}${C.reset}   ${C.green}${fmtEur(totalCost, eurRate)}${C.reset}`);
+
+  if (totalCost > 0) {
+    const sonnet = estimateClaudeCost(totalCost, 'claude-sonnet-4-6');
+    const opus   = estimateClaudeCost(totalCost, 'claude-opus-4-7');
+    const haiku  = estimateClaudeCost(totalCost, 'claude-haiku-4-5');
+    console.log();
+    console.log(`  ${C.dim}Estimated equivalent on Claude:${C.reset}`);
+    console.log(`    Haiku 4.5:                    ${fmtUsd(haiku)}    ${fmtEur(haiku, eurRate)}`);
+    console.log(`    Sonnet 4.6:                   ${C.yellow}${fmtUsd(sonnet)}${C.reset}    ${C.yellow}${fmtEur(sonnet, eurRate)}${C.reset}`);
+    console.log(`    Opus 4.7:                     ${C.red}${fmtUsd(opus)}${C.reset}    ${C.red}${fmtEur(opus, eurRate)}${C.reset}`);
+    console.log();
+    const savingsSonnet = ((sonnet - totalCost) / sonnet) * 100;
+    const savingsOpus   = ((opus   - totalCost) / opus  ) * 100;
+    console.log(`  ${C.bold}Savings vs Claude:${C.reset}`);
+    console.log(`    vs Sonnet 4.6: ${C.green}${savingsSonnet.toFixed(1)}%${C.reset}  (saved ~${fmtEur(sonnet - totalCost, eurRate)})`);
+    console.log(`    vs Opus 4.7:   ${C.green}${savingsOpus.toFixed(1)}%${C.reset}  (saved ~${fmtEur(opus - totalCost, eurRate)})`);
+  } else {
+    console.log();
+    console.log(`  ${C.yellow}⚠  total_cost_usd is 0 — the provider may not be returning cost data.${C.reset}`);
+    console.log(`  ${C.dim}This is expected on the Z.ai Coding Plan flat-rate, but unexpected on pay-per-token.${C.reset}`);
+    console.log(`  ${C.dim}If you are on pay-per-token and seeing 0, check your Z.ai billing dashboard for the real value.${C.reset}`);
+  }
+
+  console.log();
+  console.log(`${C.dim}USD->EUR rate used: ${eurRate}. Override with --eur-rate <value>.${C.reset}`);
+  console.log(`${C.dim}Pricing tables are display-only references — see Z.ai and Anthropic for current rates.${C.reset}`);
+  console.log(`${C.bold}${C.cyan}${line}${C.reset}\n`);
+}
+
+// CLI dispatch
+const args = parseArgs(process.argv.slice(2));
+
+if (args.cmd === 'help') {
+  printHelp();
+  process.exit(0);
+}
+
+if (args.cmd === 'list') {
+  printList(args.eurRate);
+  process.exit(0);
+}
+
+const workspaces = findWorkspaces();
+
+if (workspaces.length === 0) {
+  console.error(`${C.red}No workspaces found in ${WORKSPACES_DIR}${C.reset}`);
+  console.error(`${C.dim}Run hackX first: ./shannon start -u <url> -r <repo>${C.reset}`);
+  process.exit(1);
+}
+
+let target;
+if (args.cmd === 'latest') {
+  target = workspaces[0];
+} else {
+  target = workspaces.find(w => w.name === args.target);
+  if (!target) {
+    console.error(`${C.red}Workspace not found: "${args.target}"${C.reset}`);
+    console.error(`${C.dim}Available workspaces:${C.reset}`);
+    for (const w of workspaces) console.error(`  - ${w.name}`);
+    process.exit(1);
+  }
+}
+
+try {
+  const session = loadSession(target);
+  printReport(session, target.name, args.eurRate);
+} catch (e) {
+  console.error(`${C.red}Error: ${e.message}${C.reset}`);
+  process.exit(1);
+}
